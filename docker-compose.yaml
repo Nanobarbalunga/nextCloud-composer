@@ -1,0 +1,56 @@
+version : '3.7'
+
+services:
+  nextcloud:
+    image: arm64v8/nextcloud
+    container_name: ${NEXTCLOUD_CONTAINER_NAME}
+    ports:
+      - "${NEXTCLOUD_PORT}:80"
+    volumes:
+      - nc_data:/var/www/html
+    environment:
+      - MYSQL_HOST=db
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+    networks:
+      - nc_network
+    depends_on:
+      - db
+
+  db:
+    image: yobasystems/alpine-mariadb:arm64v8
+    container_name: ${DB_CONTAINER_NAME}
+    restart: ${ENABLE_RESTART:-no}
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+    networks:
+      - nc_network
+    volumes:
+      - nc_db:/var/lib/mysql
+
+  phpmyadmin:
+    image: arm64v8/phpmyadmin
+    container_name: phpmyadmin
+    restart: ${ENABLE_RESTART:-no}
+    ports:
+      - "${PHPMYADMIN_PORT}:80"
+    environment:
+      - PMA_HOST=db
+      - PMA_USER=${DB_USER}
+      - PMA_PASSWORD=${DB_PASSWORD}
+    networks:
+      - nc_network
+    links:
+      - db
+
+volumes:
+  nc_data:
+  nc_db:
+
+networks:
+  nc_network:
+    driver: bridge
