@@ -23,7 +23,7 @@ services:
       REDIS_HOST_PORT: 6379
       REDIS_HOST_PASSWORD: ${REDIS_HOST_PASSWORD}
     volumes:
-      - ${NEXTCLOUD_DATA_VOLUME}:/var/www/html
+      - nextcloud_data:/var/www/html
     networks:
       - nc_network
 
@@ -37,7 +37,7 @@ services:
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - ${DB_DATA_VOLUME}:/var/lib/mysql
+      - db_data:/var/lib/mysql
     networks:
       - nc_network
 
@@ -49,7 +49,7 @@ services:
     networks:
       - nc_network
     volumes:
-      - ${REDIS_DATA_VOLUME}:/data
+      - redis_data:/data
 
   phpmyadmin:
     image: ${PHPMYADMIN_IMAGE}
@@ -68,9 +68,12 @@ services:
       - nc_network
 
 volumes:
-  ${NEXTCLOUD_DATA_VOLUME}:
-  ${DB_DATA_VOLUME}:
-  ${REDIS_DATA_VOLUME}:
+  nextcloud_data:
+    name: ${NEXTCLOUD_DATA_VOLUME}
+  db_data:
+    name: ${DB_DATA_VOLUME}
+  redis_data:
+    name: ${REDIS_DATA_VOLUME}
 
 networks:
   nc_network:
