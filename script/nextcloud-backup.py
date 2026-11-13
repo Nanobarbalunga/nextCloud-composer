@@ -3,9 +3,15 @@
 
 Uso (dalla cartella Compose Nextcloud):
   python3 nextcloud-backup.py /mnt/backups/nextcloud --estimate
-  python3 nextcloud-backup.py /mnt/backups/nextcloud
-  python3 nextcloud-backup.py /mnt/backups/nextcloud --archive zip --preset fast
+  python3 nextcloud-backup.py /mnt/backups/nextcloud --timestamp
+  python3 nextcloud-backup.py /mnt/backups/nextcloud -t --archive zip --preset fast
   python3 nextcloud-backup.py /mnt/backups/nextcloud --archive 7z --preset max
+
+Nome cartella: nextcloud; con --timestamp/-t: nextcloud_DATA_ORA_DI_AVVIO.
+Nomi esistenti non vengono sovrascritti. Senza argomenti viene indicato -h.
+Alias: -a archive, -p preset, -t timestamp, -e estimate, -f file,
+-s service, -d db-service, -m margin-percent, -M min-free-gib,
+-P project-dir; -h/--help mostra questa guida.
 
 Python >= 3.9, Linux, Docker Compose e accesso al daemon senza sudo.
 Default: docker-compose.yaml + docker-compose.ssl.override.yaml;
@@ -272,17 +278,23 @@ exec "$DUMP" --single-transaction --quick --skip-lock-tables --default-character
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    started_at = dt.datetime.now().astimezone()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, add_help=False)
+    ap.add_argument('-h', '--help', action='help', help='Mostra questa guida ed esce')
     ap.add_argument('destination', type=Path, help='Cartella esistente su disco di backup (deve essere scrivibile)')
-    ap.add_argument('--project-dir', type=Path, default=Path.cwd(), help='Cartella Compose; default: directory corrente')
+    ap.add_argument('-P', '--project-dir', type=Path, default=Path.cwd(), help='Cartella Compose; default: directory corrente')
     ap.add_argument('-f', '--file', action='append', dest='files', help='File Compose in ordine; ripetibile, sostituisce i default')
-    ap.add_argument('--service', default='nextcloud')
-    ap.add_argument('--db-service', default='db')
-    ap.add_argument('--margin-percent', type=float, default=20, help='Margine stima archivio, default 20%%')
-    ap.add_argument('--min-free-gib', type=float, default=1, help='Spazio da lasciare libero, default 1 GiB')
-    ap.add_argument('--archive', choices=['none', 'zip', '7z'], default='none', help='Archivio aggiuntivo: none (default), zip o 7z')
-    ap.add_argument('--preset', choices=['fast', 'balanced', 'max'], default='balanced', help='Compressione: fast=1, balanced=5, max=9')
-    ap.add_argument('--estimate', action='store_true', help='Solo stima: non alloca e non ferma Nextcloud')
+    ap.add_argument('-s', '--service', default='nextcloud')
+    ap.add_argument('-d', '--db-service', default='db')
+    ap.add_argument('-m', '--margin-percent', type=float, default=20, help='Margine stima archivio, default 20%%')
+    ap.add_argument('-M', '--min-free-gib', type=float, default=1, help='Spazio da lasciare libero, default 1 GiB')
+    ap.add_argument('-a', '--archive', choices=['none', 'zip', '7z'], default='none', help='Archivio aggiuntivo: none (default), zip o 7z')
+    ap.add_argument('-p', '--preset', choices=['fast', 'balanced', 'max'], default='balanced', help='Compressione: fast=1, balanced=5, max=9')
+    ap.add_argument('-e', '--estimate', action='store_true', help='Solo stima: non alloca e non ferma Nextcloud')
+    ap.add_argument('-t', '--timestamp', action='store_true', help='Aggiunge _DATA_ORA al nome, usando l’istante di avvio dello script')
+    if len(sys.argv) == 1:
+        ap.print_usage(sys.stderr)
+        ap.exit(2, 'Nessun parametro specificato. Consulta la guida con -h oppure --help.\n')
     args = ap.parse_args()
     if not math.isfinite(args.margin_percent) or args.margin_percent < 0 or not math.isfinite(args.min_free_gib) or args.min_free_gib < 0:
         ap.error('Margini e riserva devono essere numeri finiti non negativi')
@@ -348,13 +360,17 @@ def main():
         if args.estimate:
             print('Stima completata. Nessun file di backup allocato e nessuna manutenzione attivata.')
             return
-        stamp = dt.datetime.now().strftime('%Y-%m-%d_%H-%M-%S_%f')
-        folder = dest / ('nextcloud-' + stamp + '.partial')
+        backup_name = 'nextcloud'
+        if args.timestamp:
+            backup_name += '_' + started_at.strftime('%Y%m%d_%H%M%S_%f')
+        if (dest / backup_name).exists():
+            raise RuntimeError('Backup già esistente: usare --timestamp (-t) oppure una destinazione diversa; nessuna sovrascrittura')
+        folder = dest / (backup_name + '.partial')
         folder.mkdir(mode=0o700)
         outputs = []
         stop_attempted = maintenance_attempted = False
         original_maintenance = bool(status.get('maintenance'))
-        manifest = {'format': 1, 'created_at': dt.datetime.now().astimezone().isoformat(), 'status': 'incomplete', 'datadirectory': realdata, 'nextcloud_version': status.get('versionstring'), 'image': info['Config']['Image'], 'image_id': info['Image'], 'estimates': {'html': tar_est, 'sql': sql_est}, 'files': {}}
+        manifest = {'format': 1, 'created_at': started_at.isoformat(), 'status': 'incomplete', 'datadirectory': realdata, 'nextcloud_version': status.get('versionstring'), 'image': info['Config']['Image'], 'image_id': info['Image'], 'estimates': {'html': tar_est, 'sql': sql_est}, 'files': {}}
         try:
             for name, cap in [('nextcloud-html.tar', tar_est), ('database.sql', sql_est)]:
                 print(f'Preallocazione {name}: {human(cap)}...', flush=True)
