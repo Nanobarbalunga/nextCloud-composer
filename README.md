@@ -14,6 +14,122 @@ docker compose -f docker-compose.yaml up -d
 Per gli aggiornamenti consultare [How-To-Upgrade.md](How-To-Upgrade.md). Prima di aggiornare effettuare un backup dei dati e del database.
 
 
+## Backup con controllo spazio e compressione
+
+Lo script [script/nextcloud-backup.py](script/nextcloud-backup.py) salva database MySQL/MariaDB, l'intera directory `/var/www/html` (configurazione, applicazioni e file locali), i Compose e il `.env`. Prima stima le dimensioni, verifica lo spazio e prealloca i file del backup; poi attiva la manutenzione e ferma il frontend. Il database resta acceso. Al termine, o in caso di errore gestibile, tenta di riavviare Nextcloud e ripristina lo stato di manutenzione iniziale.
+
+### Requisiti e limiti
+
+- Python 3.9 o successivo su Linux, Docker Compose e accesso al daemon Docker con l'utente corrente.
+- Servizi chiamati `nextcloud` e `db`, database configurato con `MYSQL_DATABASE`, `MYSQL_USER` e `MYSQL_PASSWORD` nel container `db`.
+- Cartella di destinazione **già esistente**, scrivibile e fuori dai mount Nextcloud. Verificare che l'eventuale disco esterno sia effettivamente montato.
+- Filesystem con supporto a `posix_fallocate`. La preallocazione di SQL/TAR avviene prima della manutenzione; se fallisce, Nextcloud non viene fermato.
+- Directory dati locale dentro `/var/www/html`; directory dati esterne vengono rifiutate. Archivi esterni SMB/S3 non sono inclusi.
+- Non eseguire aggiornamenti o processi esterni che scrivano sugli stessi dati durante il backup.
+- Il backup contiene credenziali e dati personali: file e directory hanno permessi riservati, ma **non sono cifrati**.
+
+### Solo stima
+
+Dalla cartella principale della repository, con l'override HTTPS presente:
+
+```bash
+mkdir -p "/mnt/backup/nextcloud"
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" --estimate
+```
+
+Modificare il percorso a piacere. La stima mostra dimensione dei file, dimensione fisica indicativa del database, spazio da allocare e riserva. Il dump SQL può avere dimensioni diverse dal database: lo script usa un margine prudente. Le percentuali del backup sono riferite alla stima, non a una dimensione finale già nota.
+
+### Eseguire il backup
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud"
+```
+
+Per lasciare almeno 5 GiB liberi:
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" --min-free-gib 5
+```
+
+Il margine dell'archivio TAR è configurabile con `--margin-percent` (default 20). Se il backup supera la stima, lo script controlla lo spazio prima di estendere l'allocazione. Quote, copy-on-write e scritture concorrenti possono comunque causare errori: il controllo non è una garanzia assoluta sul filesystem.
+
+### ZIP e 7z con preset
+
+La compressione parte **dopo il riavvio del frontend Nextcloud**. La cartella originale viene sempre conservata, anche dopo una compressione riuscita; occorre quindi spazio per entrambe. Il controllo iniziale comprende una stima prudente dell'archivio aggiuntivo, senza presumere che i dati siano comprimibili.
+
+| Opzione | Funzione |
+| --- | --- |
+| `--archive none` | Solo cartella di backup, default |
+| `--archive zip` | ZIP Deflate tramite Python, senza dipendenze aggiuntive |
+| `--archive 7z` | 7z LZMA2 tramite `7zz` oppure `7z`, da installare sull'host |
+| `--preset fast` | Livello 1: privilegia la velocità |
+| `--preset balanced` | Livello 5: compromesso, default |
+| `--preset max` | Livello 9: compressione più intensa, maggiore costo CPU/tempo e potenzialmente RAM |
+
+ZIP veloce:
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" --archive zip --preset fast
+```
+
+7z con compressione massima:
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" --archive 7z --preset max
+```
+
+Stima comprensiva di ZIP:
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" --archive zip --estimate
+```
+
+ZIP viene preallocato e verificato tramite CRC. Per 7z lo spazio è controllato prima e durante la compressione, mentre l'allocazione del file è gestita dal programma esterno; al termine viene eseguito il test integrità di 7-Zip. Entrambi ricevono un checksum SHA256 esterno. Il TAR dentro l'archivio conserva i metadati Unix dei file Nextcloud. I preset non garantiscono dimensioni più piccole su dati già compressi.
+
+### Senza override HTTPS o da un'altra directory
+
+Per usare soltanto il Compose originale:
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" -f docker-compose.yaml
+```
+
+Per indicare la cartella del progetto:
+
+```bash
+python3 /percorso/nextCloud-composer/script/nextcloud-backup.py "/mnt/backup/nextcloud" --project-dir /percorso/nextCloud-composer
+```
+
+L'opzione `-f` è ripetibile e sostituisce la lista predefinita dei Compose. Sono disponibili anche `--service` e `--db-service` per nomi di servizio diversi. Tutte le opzioni:
+
+```bash
+python3 script/nextcloud-backup.py --help
+```
+
+### Contenuto e verifica
+
+Ogni esecuzione crea una sottocartella `nextcloud-DATA_ORA` con:
+
+- `database.sql`: dump SQL;
+- `nextcloud-html.tar`: archivio non compresso di Nextcloud;
+- `configuration/`: copie numerate dei Compose e del `.env`;
+- `manifest.json`: versione Nextcloud, immagine, dimensioni e hash;
+- `SHA256SUMS`: checksum dei file;
+- `SUCCESS`: indicatore di completamento.
+
+Una cartella o un archivio con suffisso `.partial` è incompleto. Se fallisce solo la compressione, la cartella originale già completata rimane valida. Non vengono eliminati backup precedenti.
+
+Per ricontrollare i file, entrare nella cartella del backup:
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+Per un archivio compresso verificare anche il relativo file `.zip.sha256` o `.7z.sha256` dalla directory che lo contiene. Il controllo di integrità non sostituisce una prova di ripristino su un'istanza separata. Nel ripristino la configurazione salvata potrebbe contenere la manutenzione attiva, che va disattivata esplicitamente a fine procedura.
+
+Ctrl+C e SIGTERM attivano il recupero del servizio. SIGKILL o perdita di alimentazione non sono gestibili: verificare manualmente il container e la modalità manutenzione prima di riprendere l'uso.
+
+
 ## HTTPS / SSL con gateway esterno
 
 È possibile abilitare HTTPS usando [docker-ssl-gateway](https://github.com/Nanobarbalunga/docker-ssl-gateway), un gateway Docker Compose separato con Caddy, Certbot e rinnovo automatico tramite timer systemd utente.
