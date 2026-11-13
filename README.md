@@ -106,9 +106,46 @@ L'opzione `-f` è ripetibile e sostituisce la lista predefinita dei Compose. Son
 python3 script/nextcloud-backup.py --help
 ```
 
+
+### Parametri brevi, timestamp e guida
+
+Ogni opzione lunga ha un alias breve. Se più opzioni iniziano con la stessa lettera, si usa una lettera diversa o maiuscola: `-p` indica sempre `--preset`, mentre `-P` indica `--project-dir`. Gli alias sono sensibili a maiuscole/minuscole.
+
+| Alias | Opzione lunga | Funzione |
+| --- | --- | --- |
+| `-h` | `--help` | Mostra la guida, i parametri e gli esempi |
+| `-t` | `--timestamp` | Aggiunge `_DATA_ORA_DI_AVVIO` al nome della cartella e, se richiesto, dell’archivio |
+| `-a` | `--archive` | `none`, `zip` oppure `7z` |
+| `-p` | `--preset` | `fast`, `balanced` oppure `max` |
+| `-P` | `--project-dir` | Cartella del progetto Compose |
+| `-f` | `--file` | File Compose, ripetibile e in ordine |
+| `-s` | `--service` | Servizio Nextcloud |
+| `-d` | `--db-service` | Servizio database |
+| `-m` | `--margin-percent` | Margine percentuale della stima TAR |
+| `-M` | `--min-free-gib` | Riserva di spazio libero in GiB |
+| `-e` | `--estimate` | Solo stima, senza preallocare o fermare il frontend |
+
+Esempi equivalenti, con timestamp di avvio e ZIP bilanciato:
+
+```bash
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" --timestamp --archive zip --preset balanced
+python3 script/nextcloud-backup.py "/mnt/backup/nextcloud" -t -a zip -p balanced
+```
+
+Per backup ripetuti nella stessa destinazione usare `-t`. Il nome risultante è, per esempio, `nextcloud_20261113_143000_123456` e l’archivio `nextcloud_20261113_143000_123456.zip`. Il timestamp è nell’ora locale del Docker host.
+
+La guida funziona con entrambe le forme:
+
+```bash
+python3 script/nextcloud-backup.py -h
+python3 script/nextcloud-backup.py --help
+```
+
+Lanciando lo script senza argomenti viene mostrato un messaggio con il rimando a `-h` / `--help`; termina con codice 2 senza interrogare Docker o avviare il backup.
+
 ### Contenuto e verifica
 
-Ogni esecuzione crea una sottocartella `nextcloud-DATA_ORA` con:
+Senza `--timestamp` il backup usa la sottocartella `nextcloud`; con `--timestamp` / `-t` usa `nextcloud_DATA_ORA_DI_AVVIO` (formato `YYYYMMDD_HHMMSS_microsecondi`). L’istante viene acquisito appena lo script parte, prima della stima. In entrambi i casi un backup preesistente non viene sovrascritto: scegliere `-t` o un’altra destinazione. La sottocartella contiene:
 
 - `database.sql`: dump SQL;
 - `nextcloud-html.tar`: archivio non compresso di Nextcloud;
